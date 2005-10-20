@@ -29,7 +29,7 @@ blurt("woot3!", $filename, 1);
 is($tail->read(), "woot3!", "second append");
 
 blurt("woot4!", $filename);
-is($tail->read(), undef, "truncate");
+is($tail->read(), '', "truncate");
 
 blurt("woot5!", $filename, 1);
 is($tail->read(), "woot5!", "third append");
@@ -43,6 +43,6 @@ is($tail->read_nonblock(), "woot6!", "nonblock after actual change");
 
 unlink $filename;
 blurt("woot8!", $filename, 1);
-is($tail->read(), undef, "read after delete/recreate");
+is($tail->read(), 'woot8!', "read after delete/recreate");
 blurt("woot9!", $filename, 1);
 is($tail->read(), "woot9!", "read after delete/recreate");

@@ -6,7 +6,7 @@ use Log::Log4perl qw(:easy);
 use strict;
 use warnings;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 
 ###########################################
 sub new {
@@ -37,7 +37,7 @@ sub new {
     bless $self, $class;
 
     $self->file_open();
-    $self->checkpoint();
+    $self->checkpoint(2);
 
     return $self;
 }
@@ -64,26 +64,26 @@ sub poll_pending {
 ###########################################
 sub checkpoint {
 ###########################################
-    my($self) = @_;
+    my($self, $whence) = @_;
 
     DEBUG "Checkpoint on file $self->{file}";
 
-    seek $self->{fh}, 0, 2;
-    my $new_offset = tell $self->{fh};
+    if(defined $self->{offset}) {
+        my $new_size = -s "$self->{file}";
 
-    DEBUG "Offset on $self->{file} is $new_offset";
-
-    return undef if $new_offset == $self->{offset};
-
-    if($new_offset < $self->{offset}) {
-        # File truncated, re-read
-        $self->file_close();
-        $self->file_open();
-        seek $self->{fh}, 0, 2;
+        if($new_size < $self->{offset}) {
+            # File truncated, re-read
+            DEBUG "Assuming truncated file";
+            $self->file_close();
+            $self->file_open(0);
+        }
     }
 
+        # Seek to $whence
+    seek $self->{fh}, 0, $whence;
     $self->{offset} = tell $self->{fh};
-    return 1;
+
+    DEBUG "Offset on $self->{file} is $self->{offset}";
 }
 
 ###########################################
@@ -91,7 +91,8 @@ sub read {
 ###########################################
     my($self, $nonblock) = @_;
 
-    {
+    while(1) {
+
         if($nonblock) {
             unless($self->{fam}->pending()) {
                 DEBUG "No events pending in non-blocking read";
@@ -101,36 +102,27 @@ sub read {
 
         DEBUG "Blocking for next event";
         my $e = $self->{fam}->next_event();
-    
         DEBUG "Got event: ", $e->type();
 
         my $data;
 
         if($e->type() eq "create") {
-            $data = $self->read_more(1);
-        } else {
-            redo if $e->type() ne "change";
+            $self->checkpoint(0);
             $data = $self->read_more();
+            redo unless defined $data;
+            return $data;
+        } elsif( $e->type() eq "change" ) {
+            $data = $self->read_more();
+            redo unless defined $data;
+            return $data;
         }
-        return $data;
     }
 }
 
 ###########################################
 sub read_more {
 ###########################################
-    my($self, $truncated) = @_;
-
-    my $new_size = -s "$self->{file}";
-
-    if($truncated or $new_size < $self->{offset}) {
-        # File truncated, re-read
-        DEBUG "Assuming truncated file";
-        $self->file_close();
-        $self->file_open();
-        seek $self->{fh}, 0, 2;
-        return undef;
-    }
+    my($self) = @_;
 
        # Lift EOF
     seek $self->{fh}, 0, 1;
@@ -144,7 +136,10 @@ sub read_more {
     if(defined $data) {
         DEBUG "Found data: '$data'";
     } else {
-        ERROR "read_more() can't read data";
+            # This can happen if we get several change events
+            # in a row, no problem
+        $self->checkpoint(2);
+        return undef;
     }
 
     $self->{offset} = tell $self->{fh};
@@ -165,7 +160,9 @@ sub file_close {
 ##################################################
 sub file_open {
 ##################################################
-    my($self) = @_;
+    my($self, $whence) = @_;
+
+    $whence = 2 unless defined $whence;
 
     DEBUG "Opening file $self->{file}";
 
@@ -177,7 +174,7 @@ sub file_open {
     $self->{fh} = $fh;
 
         # Seek to EOF
-    seek $self->{fh}, 0, 2;
+    seek $self->{fh}, 0, $whence;
     $self->{offset} = tell $self->{fh};
 
     DEBUG "Setting offset to $self->{offset}";
